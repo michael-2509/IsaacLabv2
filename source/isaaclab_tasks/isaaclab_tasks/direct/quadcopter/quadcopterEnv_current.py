@@ -19,7 +19,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.math import quat_rotate, subtract_frame_transforms
+from isaaclab.utils.math import quat_apply, subtract_frame_transforms
 
 ##
 # Pre-defined configs
@@ -83,12 +83,10 @@ class VelocityGeometricController:
         force_norm = torch.linalg.norm(force_w, dim=1, keepdim=True).clamp(min=1.0e-6)
         b3_des_w = force_w / force_norm
 
+        # Use the force projection on the current body-z axis directly.
+        # Full 1 / cos(tilt) compensation over-amplifies thrust while tilted and
+        # can turn a recoverable lean into a runaway lateral acceleration.
         thrust_mag = torch.sum(force_w * b3_curr_w, dim=1)
-
-        # Compensate for tilt-induced vertical thrust loss
-        current_tilt = torch.acos(torch.clamp(b3_curr_w[:, 2], -1.0, 1.0))
-        tilt_compensation = 1.0 / torch.clamp(torch.cos(current_tilt), min=0.5, max=1.0)
-        thrust_mag = thrust_mag * tilt_compensation
 
         min_thrust = self.cfg.min_thrust_to_weight * self.robot_weight
         max_thrust = self.cfg.max_thrust_to_weight * self.robot_weight
@@ -201,7 +199,9 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     lin_vel_reward_scale = -0.05
     ang_vel_reward_scale = -0.01
     distance_to_goal_reward_scale = 15.0
+    progress_to_goal_reward_scale = 8.0
     upright_reward_scale = 2.0
+    tilt_penalty_reward_scale = -2.0
     collision_penalty_reward_scale = -12.0
     obstacle_proximity_penalty_reward_scale = -2.5
 
@@ -240,6 +240,7 @@ class QuadcopterEnv(DirectRLEnv):
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
         # Goal position
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
+        self._prev_goal_distance = torch.zeros(self.num_envs, device=self.device)
         # Dynamic obstacles tracked in tensors
         self._obstacle_pos_w = torch.zeros(self.num_envs, self.cfg.num_obstacles, 3, device=self.device)
         self._obstacle_vel_w = torch.zeros(self.num_envs, self.cfg.num_obstacles, 3, device=self.device)
@@ -259,7 +260,9 @@ class QuadcopterEnv(DirectRLEnv):
                 "lin_vel",
                 "ang_vel",
                 "distance_to_goal",
+                "progress_to_goal",
                 "upright",
+                "tilt_penalty",
                 "collision_penalty",
                 "obstacle_proximity_penalty",
             ]
@@ -327,7 +330,7 @@ class QuadcopterEnv(DirectRLEnv):
         target_vel_b[:, 0] = self._actions[:, 0] * self.cfg.max_target_speed_xy
         target_vel_b[:, 1] = self._actions[:, 1] * self.cfg.max_target_speed_xy
         target_vel_b[:, 2] = self._actions[:, 2] * self.cfg.max_target_speed_z
-        target_vel_w = quat_rotate(self._robot.data.root_quat_w, target_vel_b)
+        target_vel_w = quat_apply(self._robot.data.root_quat_w, target_vel_b)
         target_yaw_rate = self._actions[:, 3:4] * self.cfg.max_target_yaw_rate
 
         self._thrust, self._moment = self._ll_controller.compute(
@@ -370,16 +373,21 @@ class QuadcopterEnv(DirectRLEnv):
         lin_vel = torch.sum(torch.square(self._robot.data.root_lin_vel_b), dim=1)
         ang_vel = torch.sum(torch.square(self._robot.data.root_ang_vel_b), dim=1)
         distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._robot.data.root_pos_w, dim=1)
+        progress_to_goal = self._prev_goal_distance - distance_to_goal
+        self._prev_goal_distance = distance_to_goal.detach()
         distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
         upright = -self._robot.data.projected_gravity_b[:, 2]
         upright_reward = torch.clamp(upright, 0.0, 1.0)
+        tilt_penalty = 1.0 - upright_reward
         collision_penalty = self._compute_collision_penalty()
         obstacle_proximity_penalty = self._compute_obstacle_proximity_penalty()
         rewards = {
             "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * self.step_dt,
             "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * self.step_dt,
             "distance_to_goal": distance_to_goal_mapped * self.cfg.distance_to_goal_reward_scale * self.step_dt,
+            "progress_to_goal": progress_to_goal * self.cfg.progress_to_goal_reward_scale,
             "upright": upright_reward * self.cfg.upright_reward_scale * self.step_dt,
+            "tilt_penalty": tilt_penalty * self.cfg.tilt_penalty_reward_scale * self.step_dt,
             "collision_penalty": collision_penalty * self.cfg.collision_penalty_reward_scale * self.step_dt,
             "obstacle_proximity_penalty": obstacle_proximity_penalty
             * self.cfg.obstacle_proximity_penalty_reward_scale
@@ -458,6 +466,9 @@ class QuadcopterEnv(DirectRLEnv):
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        self._prev_goal_distance[env_ids] = torch.linalg.norm(
+            self._desired_pos_w[env_ids] - default_root_state[:, :3], dim=1
+        )
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         if debug_vis:
