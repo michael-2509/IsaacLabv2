@@ -181,27 +181,29 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     max_target_speed_xy = 0.70
     max_target_speed_z = 0.40
     max_target_yaw_rate = 1.00
+    enable_action_rate_limit = True
+    enable_action_smoothing = True
     action_rate_limit = 0.06
     action_smoothing = 0.20
     ll_kv_xy = 2.4
     ll_kv_z = 3.2
-    ll_kR_xy = 0.040
+    ll_kR_xy = 0.080
     ll_kR_z = 0.020
-    ll_kw_xy = 0.010
+    ll_kw_xy = 0.008
     ll_kw_z = 0.004
     min_thrust_to_weight = 0.7
     max_thrust_to_weight = 1.90
-    moment_limit_xy = 0.006
-    moment_limit_z = 0.003
-    max_tilt_angle = 0.90
+    moment_limit_xy = 0.012
+    moment_limit_z = 0.004
+    max_tilt_angle = 0.52
 
     # reward scales
     lin_vel_reward_scale = -0.05
-    ang_vel_reward_scale = -0.01
+    ang_vel_reward_scale = -0.02
     distance_to_goal_reward_scale = 15.0
     progress_to_goal_reward_scale = 8.0
-    upright_reward_scale = 2.0
-    tilt_penalty_reward_scale = -2.0
+    upright_reward_scale = 3.0
+    tilt_penalty_reward_scale = -4.0
     collision_penalty_reward_scale = -12.0
     obstacle_proximity_penalty_reward_scale = -2.5
 
@@ -321,10 +323,7 @@ class QuadcopterEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         raw_actions = actions.clone().clamp(-1.0, 1.0)
-        action_delta = torch.clamp(raw_actions - self._prev_actions, -self.cfg.action_rate_limit, self.cfg.action_rate_limit)
-        self._actions = (1.0 - self.cfg.action_smoothing) * self._prev_actions + self.cfg.action_smoothing * (
-            self._prev_actions + action_delta
-        )
+        self._actions = self._process_actions(raw_actions)
         self._prev_actions = self._actions.clone()
         target_vel_b = torch.zeros(self.num_envs, 3, device=self.device)
         target_vel_b[:, 0] = self._actions[:, 0] * self.cfg.max_target_speed_xy
@@ -341,6 +340,20 @@ class QuadcopterEnv(DirectRLEnv):
             target_yaw_rate=target_yaw_rate,
         )
         self._update_obstacles()
+
+    def _process_actions(self, raw_actions: torch.Tensor) -> torch.Tensor:
+        processed_actions = raw_actions
+        if self.cfg.enable_action_rate_limit:
+            processed_actions = self._prev_actions + torch.clamp(
+                processed_actions - self._prev_actions,
+                -self.cfg.action_rate_limit,
+                self.cfg.action_rate_limit,
+            )
+        if self.cfg.enable_action_smoothing:
+            processed_actions = (1.0 - self.cfg.action_smoothing) * self._prev_actions + self.cfg.action_smoothing * (
+                processed_actions
+            )
+        return processed_actions
 
     def _apply_action(self):
         self._robot.permanent_wrench_composer.set_forces_and_torques(
