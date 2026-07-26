@@ -5,7 +5,12 @@
 
 from isaaclab.utils import configclass
 
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
+from isaaclab_rl.rsl_rl import (
+    RslRlOnPolicyRunnerCfg,
+    RslRlPpoActorCriticCfg,
+    RslRlPpoActorCriticRecurrentCfg,
+    RslRlPpoAlgorithmCfg,
+)
 
 
 @configclass
@@ -14,7 +19,7 @@ class QuadcopterPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     max_iterations = 200
     save_interval = 50
     experiment_name = "quadcopter_direct"
-    
+
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=0.1,  # Reduced from 0.3 (more conservative)
         actor_obs_normalization=True,  # Enable for mixed observation scales
@@ -23,7 +28,7 @@ class QuadcopterPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         critic_hidden_dims=[128, 128, 64],
         activation="elu",
     )
-    
+
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
@@ -37,4 +42,32 @@ class QuadcopterPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
+    )
+
+
+@configclass
+class QuadcopterPPORunnerRecurrentCfg(QuadcopterPPORunnerCfg):
+    """Ablation config: LSTM-augmented actor-critic in place of the flat MLP.
+
+    Tests whether giving the policy memory across steps (rather than reacting
+    only to the current 25-dim observation) reduces the failure rate driven by
+    fast-moving dynamic obstacles, as hypothesized in the paper's Conclusion.
+    Everything else (env, reward, PPO hyperparameters) is held fixed relative
+    to `QuadcopterPPORunnerCfg` so the recurrent layer is the sole independent
+    variable.
+    """
+
+    max_iterations = 400  # recurrent policies need more updates to converge; keep an eye on reward plateau
+    experiment_name = "quadcopter_direct_recurrent"
+
+    policy = RslRlPpoActorCriticRecurrentCfg(
+        init_noise_std=0.1,
+        actor_obs_normalization=True,
+        critic_obs_normalization=True,
+        actor_hidden_dims=[128, 128, 64],
+        critic_hidden_dims=[128, 128, 64],
+        activation="elu",
+        rnn_type="lstm",
+        rnn_hidden_dim=128,
+        rnn_num_layers=1,
     )

@@ -337,6 +337,19 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     vio_drift_walk_std = 0.0005
 
 
+@configclass
+class QuadcopterEnvCfgFlat(QuadcopterEnvCfg):
+    """Ablation config: flat/direct-wrench policy, bypassing VelocityGeometricController.
+
+    Actions are interpreted directly as thrust-to-weight delta + body moments
+    (see `_pre_physics_step`'s `use_direct_wrench_mode` branch) instead of being
+    tracked by the low-level geometric controller. Used to benchmark the
+    hierarchical architecture against a flat end-to-end policy baseline.
+    """
+
+    use_direct_wrench_mode = True
+
+
 class QuadcopterEnv(DirectRLEnv):
     cfg: QuadcopterEnvCfg
 
@@ -721,6 +734,13 @@ class QuadcopterEnv(DirectRLEnv):
         extras["Episode_Termination/died"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
         extras["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
+        # Breakdown of `died` by cause, so failure-mode attribution (e.g. tip-over
+        # vs. collision) doesn't have to be inferred from reward-term magnitudes.
+        done_reason_codes = self._last_done_reason_code[env_ids]
+        extras["Episode_Termination/collision"] = torch.count_nonzero(done_reason_codes == 1).item()
+        extras["Episode_Termination/tipped"] = torch.count_nonzero(done_reason_codes == 2).item()
+        extras["Episode_Termination/below_floor"] = torch.count_nonzero(done_reason_codes == 3).item()
+        extras["Episode_Termination/above_ceiling"] = torch.count_nonzero(done_reason_codes == 4).item()
         self.extras["log"].update(extras)
 
         self._robot.reset(env_ids)
