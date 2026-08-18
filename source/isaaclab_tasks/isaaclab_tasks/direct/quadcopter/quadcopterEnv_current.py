@@ -720,9 +720,14 @@ class QuadcopterEnv(DirectRLEnv):
             env_ids = self._robot._ALL_INDICES
 
         # Logging
-        final_distance_to_goal = torch.linalg.norm(
+        final_distance_to_goal_per_env = torch.linalg.norm(
             self._desired_pos_w[env_ids] - self._robot.data.root_pos_w[env_ids], dim=1
-        ).mean()
+        )
+        final_distance_to_goal = final_distance_to_goal_per_env.mean()
+        # Snapshot raw per-env sums before they're zeroed below, so per-env outcomes
+        # (used by held-out multi-seed evaluation) reflect each env's own episode,
+        # not the batch-mean used for the aggregate "Episode_Reward/*" scalars.
+        episode_sums_snapshot = {key: self._episode_sums[key][env_ids].clone() for key in self._episode_sums.keys()}
         extras = dict()
         for key in self._episode_sums.keys():
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
@@ -742,6 +747,31 @@ class QuadcopterEnv(DirectRLEnv):
         extras["Episode_Termination/below_floor"] = torch.count_nonzero(done_reason_codes == 3).item()
         extras["Episode_Termination/above_ceiling"] = torch.count_nonzero(done_reason_codes == 4).item()
         self.extras["log"].update(extras)
+
+        # Per-env episode outcomes for held-out multi-seed evaluation. This is a
+        # pure addition to `self.extras` (a key rsl_rl's training loop never reads)
+        # so it has no effect on training dynamics, reward, or observations -- it
+        # only gives an external eval script a per-episode row instead of the
+        # batch-mean scalars above.
+        _cause_by_code = {0: "timeout", 1: "collision", 2: "tipped", 3: "floor", 4: "ceiling"}
+        episode_outcomes = []
+        for i, env_id in enumerate(env_ids.tolist()):
+            reason_code = int(done_reason_codes[i].item())
+            episode_return = sum(episode_sums_snapshot[key][i].item() for key in episode_sums_snapshot.keys())
+            episode_outcomes.append(
+                {
+                    "env_id": env_id,
+                    "success": reason_code == 0,
+                    "termination_cause": _cause_by_code.get(reason_code, "timeout"),
+                    "final_distance_m": float(final_distance_to_goal_per_env[i].item()),
+                    "mean_tilt_penalty": float(
+                        episode_sums_snapshot["tilt_penalty"][i].item() / self.max_episode_length_s
+                    ),
+                    "mean_angvel_penalty": float(episode_sums_snapshot["ang_vel"][i].item() / self.max_episode_length_s),
+                    "episode_return": float(episode_return),
+                }
+            )
+        self.extras["episode_outcomes"] = episode_outcomes
 
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)

@@ -1,0 +1,7 @@
+{
+  "condition": "hierarchical",
+  "seed": 3,
+  "task": "Isaac-Quadcopter-Direct-v0",
+  "isaac_log_dir": "/home/ubuntu/IsaacLabv2/logs/rsl_rl/multiseed_hierarchical/2026-07-26_05-53-38_seed3",
+  "checkpoint": "/home/ubuntu/IsaacLabv2/logs/rsl_rl/multiseed_hierarchical/2026-07-26_05-53-38_seed3/model_199.pt"
+}

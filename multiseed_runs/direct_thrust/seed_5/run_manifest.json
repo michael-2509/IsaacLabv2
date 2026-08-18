@@ -1,0 +1,7 @@
+{
+  "condition": "direct_thrust",
+  "seed": 5,
+  "task": "Isaac-Quadcopter-Direct-Flat-v0",
+  "isaac_log_dir": "/home/ubuntu/IsaacLabv2/logs/rsl_rl/multiseed_direct_thrust/2026-07-26_07-08-48_seed5",
+  "checkpoint": "/home/ubuntu/IsaacLabv2/logs/rsl_rl/multiseed_direct_thrust/2026-07-26_07-08-48_seed5/model_199.pt"
+}

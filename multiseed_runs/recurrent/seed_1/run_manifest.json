@@ -1,0 +1,7 @@
+{
+  "condition": "recurrent",
+  "seed": 1,
+  "task": "Isaac-Quadcopter-Direct-Recurrent-v0",
+  "isaac_log_dir": "/home/ubuntu/IsaacLabv2/logs/rsl_rl/multiseed_recurrent/2026-07-26_07-17-15_seed1",
+  "checkpoint": "/home/ubuntu/IsaacLabv2/logs/rsl_rl/multiseed_recurrent/2026-07-26_07-17-15_seed1/model_399.pt"
+}
